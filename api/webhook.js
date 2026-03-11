@@ -2,7 +2,7 @@ import axios from "axios";
 import sharp from "sharp";
 
 const TOKEN = process.env.BOT_TOKEN;
-const ADMIN_ID = 123456789; // replace with your Telegram ID
+const ADMIN_ID = 2067674349; // replace with your Telegram ID
 
 let userFiles = {};
 let users = new Set();
