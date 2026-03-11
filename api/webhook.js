@@ -2,7 +2,7 @@ import axios from "axios";
 import sharp from "sharp";
 
 const TOKEN = process.env.BOT_TOKEN;
-const ADMIN_ID = 2067674349; // replace with your Telegram ID
+const ADMIN_ID = 2067674349;
 
 let userFiles = {};
 let users = new Set();
@@ -37,9 +37,9 @@ text:`👋 Welcome to File Converter Bot
 
 Send an image and choose format:
 
-🟢 PNG
-🟢 JPG
-🟢 WEBP
+PNG
+JPG
+WEBP
 
 Just send a photo to start converting.`
 }
@@ -144,10 +144,17 @@ const formData = new FormData();
 
 formData.append("chat_id", chatId);
 
+/* WEBP sticker fix */
+let filename = `converted.${format}`;
+
+if(format === "webp"){
+filename = "converted_image.webp";
+}
+
 formData.append(
 "document",
 new Blob([output], { type: "application/octet-stream" }),
-`converted.${format}`
+filename
 );
 
 await axios.post(
