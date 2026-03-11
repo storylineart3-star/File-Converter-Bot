@@ -17,13 +17,36 @@ const update = req.body;
 
 try {
 
-/* ---------------- MESSAGE HANDLER ---------------- */
+/* ---------------- MESSAGE ---------------- */
 
 if(update.message){
 
 const chatId = update.message.chat.id;
 
 users.add(chatId);
+
+/* -------- START MESSAGE -------- */
+
+if(update.message.text === "/start"){
+
+await axios.post(
+`https://api.telegram.org/bot${TOKEN}/sendMessage`,
+{
+chat_id: chatId,
+text:
+`👋 Welcome to File Converter Bot
+
+Send me an image and I will convert it to:
+
+🟢 PNG
+🟢 JPG
+🟢 WEBP
+
+Just send a photo to begin.`
+}
+);
+
+}
 
 /* -------- BROADCAST -------- */
 
@@ -109,6 +132,41 @@ output = await sharp(image.data).png().toBuffer();
 }
 
 if(format==="jpg"){
+output = await sharp(image.data).jpeg().toBuffer();
+}
+
+if(format==="webp"){
+output = await sharp(image.data).webp().toBuffer();
+}
+
+/* -------- SEND FILE -------- */
+
+const formData = new FormData();
+
+formData.append("chat_id", chatId);
+
+formData.append(
+"document",
+new Blob([output], { type: "application/octet-stream" }),
+`converted.${format}`
+);
+
+await axios.post(
+`https://api.telegram.org/bot${TOKEN}/sendDocument`,
+formData
+);
+
+}
+
+}catch(e){
+
+console.log(e.message);
+
+}
+
+res.status(200).send("ok");
+
+}if(format==="jpg"){
 output = await sharp(image.data).jpeg().toBuffer();
 }
 
