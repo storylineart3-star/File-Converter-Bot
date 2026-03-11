@@ -25,231 +25,141 @@ const update = req.body;
 
 try {
 
-/* ---------------- MESSAGE ---------------- */
-
 if (update.message) {
-
-const chatId = update.message.chat.id;
-await redis.sadd("users", chatId);
-
-/* ---------- RATE LIMIT ---------- */
-
-const rateKey = `rate:${chatId}`;
-const count = await redis.incr(rateKey);
-
-if (count === 1) await redis.expire(rateKey, 60);
-
-if (count > 10) {
-  await sendMessage(chatId,"⚠️ Too many requests. Wait 60 seconds.");
-  return res.status(200).send("ok");
+  await handleMessage(update.message);
 }
-
-/* ---------- JOIN CHECK ---------- */
-
-if (!(await isUserJoined(chatId))) {
-
-await axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`,{
-chat_id:chatId,
-text:"Join our channel to use this bot",
-reply_markup:{
-inline_keyboard:[
-[{text:"Join Channel",url:`https://t.me/${CHANNEL.replace("@","")}`}],
-[{text:"I Joined",callback_data:"check_join"}]
-]
-}
-});
-
-return res.status(200).send("ok");
-}
-
-/* ---------- START ---------- */
-
-if (update.message.text === "/start") {
-
-await sendMessage(chatId,
-`👋 Welcome to File Converter Bot
-
-Send an image and choose what to do.
-
-Available tools:
-
-• Convert Format
-• Resize Image
-• Compress Image
-• Create Sticker
-• Convert to PDF
-• Remove Metadata
-
-Use /menu anytime`
-);
-
-}
-
-/* ---------- MENU ---------- */
-
-if (update.message.text === "/menu") {
-
-await axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`,{
-chat_id:chatId,
-text:"Choose action",
-reply_markup:{
-inline_keyboard:[
-[{text:"Convert Format",callback_data:"convert"}],
-[{text:"Resize Image",callback_data:"resize"}],
-[{text:"Compress Image",callback_data:"compress"}],
-[{text:"Create Sticker",callback_data:"sticker"}],
-[{text:"Convert to PDF",callback_data:"pdf"}],
-[{text:"Remove Metadata",callback_data:"meta"}]
-]
-}
-});
-
-}
-
-/* ---------- ADMIN STATS ---------- */
-
-if (update.message.text === "/stats" && chatId === ADMIN_ID) {
-
-const users = await redis.smembers("users");
-const conversions = await redis.get("stats:convert") || 0;
-const resize = await redis.get("stats:resize") || 0;
-const pdf = await redis.get("stats:pdf") || 0;
-const sticker = await redis.get("stats:sticker") || 0;
-
-await sendMessage(chatId,
-`📊 Bot Stats
-
-Users: ${users.length}
-Conversions: ${conversions}
-Resized: ${resize}
-PDF Created: ${pdf}
-Stickers: ${sticker}`
-);
-
-}
-
-/* ---------- BROADCAST ---------- */
-
-if (update.message.text?.startsWith("/broadcast") && chatId === ADMIN_ID) {
-
-const text = update.message.text.replace("/broadcast ","");
-const users = await redis.smembers("users");
-
-for (const id of users) {
-try{ await sendMessage(id,text); }catch{}
-}
-
-}
-
-/* ---------- IMAGE RECEIVED ---------- */
-
-if (update.message.photo) {
-
-const fileId = update.message.photo.pop().file_id;
-userFiles[chatId] = fileId;
-
-await axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`,{
-chat_id:chatId,
-text:"Choose action",
-reply_markup:{
-inline_keyboard:[
-[{text:"Convert Format",callback_data:"convert"}],
-[{text:"Resize Image",callback_data:"resize"}],
-[{text:"Compress Image",callback_data:"compress"}],
-[{text:"Create Sticker",callback_data:"sticker"}],
-[{text:"Convert to PDF",callback_data:"pdf"}],
-[{text:"Remove Metadata",callback_data:"meta"}]
-]
-}
-});
-
-}
-
-}
-
-/* ---------------- CALLBACK HANDLER ---------------- */
 
 if (update.callback_query) {
+  await handleCallback(update.callback_query);
+}
 
-const chatId = update.callback_query.message.chat.id;
-const action = update.callback_query.data;
+} catch (err) {
+  console.log(err);
+}
 
-/* ---------- JOIN CONFIRM ---------- */
+res.status(200).send("ok");
+}
 
-if (action === "check_join") {
+/* ---------- MESSAGE HANDLER ---------- */
 
-if (await isUserJoined(chatId)) {
-await sendMessage(chatId,"✅ You can now use the bot!");
-}else{
-await sendMessage(chatId,"❌ Please join first.");
+async function handleMessage(msg){
+
+const chatId = msg.chat.id;
+
+await redis.sadd("users", chatId);
+
+/* START */
+
+if (msg.text === "/start") {
+await sendMessage(chatId,
+`👋 Welcome
+
+Send an image then choose:
+
+• Convert
+• Resize
+• Compress
+• Sticker
+• PDF
+• Remove metadata
+
+Use /menu anytime`);
+}
+
+/* MENU */
+
+if (msg.text === "/menu") {
+
+await axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`,{
+chat_id:chatId,
+text:"Choose action",
+reply_markup:{
+inline_keyboard:[
+[{text:"Convert Format",callback_data:"convert"}],
+[{text:"Resize",callback_data:"resize"}],
+[{text:"Compress",callback_data:"compress"}],
+[{text:"Sticker",callback_data:"sticker"}],
+[{text:"PDF",callback_data:"pdf"}],
+[{text:"Remove Meta",callback_data:"meta"}]
+]
+}
+});
+
+}
+
+/* IMAGE */
+
+if (msg.photo) {
+
+const fileId = msg.photo.pop().file_id;
+userFiles[chatId] = fileId;
+
+await sendMessage(chatId,"Image received. Use /menu");
+
 }
 
 }
 
-/* ---------- FORMAT MENU ---------- */
+/* ---------- CALLBACK HANDLER ---------- */
+
+async function handleCallback(query){
+
+const chatId = query.message.chat.id;
+const action = query.data;
 
 if (action === "convert") {
 
-await axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`,{
-chat_id:chatId,
-text:"Choose format",
-reply_markup:{
-inline_keyboard:[
+await sendButtons(chatId,"Select format",[
 [{text:"PNG",callback_data:"png"}],
 [{text:"JPG",callback_data:"jpg"}],
 [{text:"WEBP",callback_data:"webp"}]
-]
-}
-});
+]);
+
+return;
 
 }
-
-/* ---------- RESIZE MENU ---------- */
 
 if (action === "resize") {
 
-await axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`,{
-chat_id:chatId,
-text:"Resize Image",
-reply_markup:{
-inline_keyboard:[
+await sendButtons(chatId,"Resize",[
 [{text:"512x512",callback_data:"512"}],
 [{text:"1024x1024",callback_data:"1024"}],
 [{text:"2:3 Poster",callback_data:"poster"}]
-]
-}
-});
+]);
+
+return;
 
 }
-
-/* ---------- COMPRESS MENU ---------- */
 
 if (action === "compress") {
 
-await axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`,{
-chat_id:chatId,
-text:"Compression level",
-reply_markup:{
-inline_keyboard:[
+await sendButtons(chatId,"Compression",[
 [{text:"High",callback_data:"c80"}],
 [{text:"Medium",callback_data:"c60"}],
 [{text:"Low",callback_data:"c40"}]
-]
+]);
+
+return;
+
 }
-});
+
+await processImage(chatId,action);
 
 }
 
 /* ---------- IMAGE PROCESS ---------- */
 
-const fileId = userFiles[chatId];
+async function processImage(chatId,action){
 
-if (!fileId) return res.status(200).send("ok");
+const fileId = userFiles[chatId];
+if (!fileId) return;
 
 const fileInfo = await axios.get(`https://api.telegram.org/bot${TOKEN}/getFile?file_id=${fileId}`);
+
 const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${fileInfo.data.result.file_path}`;
 
 const image = await axios.get(fileUrl,{responseType:"arraybuffer"});
+
 let buffer;
 
 /* FORMAT */
@@ -257,32 +167,27 @@ let buffer;
 if (["png","jpg","webp"].includes(action)) {
 
 buffer = await sharp(image.data)[action === "jpg" ? "jpeg" : action]().toBuffer();
-await redis.incr("stats:convert");
 
 }
 
 /* RESIZE */
 
-if (action === "512") {
+if (action === "512")
 buffer = await sharp(image.data).resize(512,512).toBuffer();
-await redis.incr("stats:resize");
-}
 
-if (action === "1024") {
+if (action === "1024")
 buffer = await sharp(image.data).resize(1024,1024).toBuffer();
-await redis.incr("stats:resize");
-}
 
-if (action === "poster") {
+if (action === "poster")
 buffer = await sharp(image.data).resize(1200,1800).toBuffer();
-await redis.incr("stats:resize");
-}
 
 /* COMPRESS */
 
 if (action?.startsWith("c")) {
+
 const q = parseInt(action.replace("c",""));
 buffer = await sharp(image.data).jpeg({quality:q}).toBuffer();
+
 }
 
 /* STICKER */
@@ -290,14 +195,14 @@ buffer = await sharp(image.data).jpeg({quality:q}).toBuffer();
 if (action === "sticker") {
 
 buffer = await sharp(image.data).resize(512,512).webp().toBuffer();
-await redis.incr("stats:sticker");
 
 const form = new FormData();
 form.append("chat_id",chatId);
 form.append("sticker",buffer,{filename:"sticker.webp"});
 
 await axios.post(`https://api.telegram.org/bot${TOKEN}/sendSticker`,form);
-return res.status(200).send("ok");
+
+return;
 
 }
 
@@ -307,6 +212,7 @@ if (action === "pdf") {
 
 const pdfDoc = await PDFDocument.create();
 const img = await pdfDoc.embedPng(await sharp(image.data).png().toBuffer());
+
 const page = pdfDoc.addPage([img.width,img.height]);
 page.drawImage(img,{x:0,y:0,width:img.width,height:img.height});
 
@@ -318,13 +224,11 @@ form.append("document",Buffer.from(pdfBytes),{filename:"image.pdf"});
 
 await axios.post(`https://api.telegram.org/bot${TOKEN}/sendDocument`,form);
 
-await redis.incr("stats:pdf");
-
-return res.status(200).send("ok");
+return;
 
 }
 
-/* REMOVE META */
+/* META REMOVE */
 
 if (action === "meta") {
 buffer = await sharp(image.data).withMetadata(false).toBuffer();
@@ -344,15 +248,7 @@ await axios.post(`https://api.telegram.org/bot${TOKEN}/sendDocument`,form);
 
 }
 
-}catch(e){
-console.log(e);
-}
-
-res.status(200).send("ok");
-
-}
-
-/* ---------------- HELPERS ---------------- */
+/* ---------- HELPERS ---------- */
 
 async function sendMessage(chatId,text){
 
@@ -363,20 +259,12 @@ text
 
 }
 
-async function isUserJoined(chatId){
+async function sendButtons(chatId,text,buttons){
 
-try{
-
-const res = await axios.get(
-`https://api.telegram.org/bot${TOKEN}/getChatMember?chat_id=${CHANNEL}&user_id=${chatId}`
-);
-
-const status = res.data.result.status;
-
-return status === "member" || status === "administrator" || status === "creator";
-
-}catch{
-return false;
-}
+await axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`,{
+chat_id:chatId,
+text,
+reply_markup:{inline_keyboard:buttons}
+});
 
 }
