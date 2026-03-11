@@ -1,19 +1,24 @@
 import axios from "axios";
 import sharp from "sharp";
+import FormData from "form-data";
 
 const TOKEN = process.env.BOT_TOKEN;
 
 export default async function handler(req, res) {
 
 if (req.method !== "POST") {
-return res.status(200).send("Bot running");
+  return res.status(200).send("Bot running");
 }
 
 const update = req.body;
 
-if (update.message) {
+if (!update.message) {
+  return res.status(200).send("ok");
+}
 
 const chatId = update.message.chat.id;
+
+try {
 
 if (update.message.photo) {
 
@@ -25,21 +30,25 @@ const filePath = fileInfo.data.result.file_path;
 
 const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${filePath}`;
 
-const image = await axios.get(fileUrl,{responseType:"arraybuffer"});
+const imageResponse = await axios.get(fileUrl,{responseType:"arraybuffer"});
 
-const converted = await sharp(image.data).png().toBuffer();
+const convertedImage = await sharp(imageResponse.data).png().toBuffer();
 
-const formData = new FormData();
+const form = new FormData();
 
-formData.append("chat_id", chatId);
-formData.append("document", new Blob([converted]), "converted.png");
-
-await axios.post(`https://api.telegram.org/bot${TOKEN}/sendDocument`,formData,{
-headers: formData.getHeaders()
+form.append("chat_id", chatId);
+form.append("document", convertedImage, {
+filename: "converted.png"
 });
 
+await axios.post(
+`https://api.telegram.org/bot${TOKEN}/sendDocument`,
+form,
+{ headers: form.getHeaders() }
+);
+
 }
-else{
+else {
 
 await axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`,{
 chat_id: chatId,
@@ -47,6 +56,13 @@ text: "📂 Send an image and I will convert it to PNG."
 });
 
 }
+
+} catch (error) {
+
+await axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`,{
+chat_id: chatId,
+text: "⚠️ Conversion failed. Try a smaller image."
+});
 
 }
 
