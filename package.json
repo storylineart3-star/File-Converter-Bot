@@ -4,13 +4,14 @@
   "type": "module",
   "main": "api/webhook.js",
   "dependencies": {
-  "@upstash/redis": "^1.28.4",
-  "archiver": "^7.0.1",
-  "axios": "^1.6.7",
-  "form-data": "^4.0.0",
-  "jsqr": "^1.4.0",
-  "pdf-lib": "^1.17.1",
-  "qrcode": "^1.5.3",
-  "sharp": "^0.33.2"
+    "@upstash/redis": "^1.28.4",
+    "archiver": "^7.0.1",
+    "axios": "^1.6.7",
+    "convertapi": "^1.1.0",
+    "form-data": "^4.0.0",
+    "jsqr": "^1.4.0",
+    "pdf-lib": "^1.17.1",
+    "qrcode": "^1.5.3",
+    "sharp": "^0.33.2"
   }
-  
+}
