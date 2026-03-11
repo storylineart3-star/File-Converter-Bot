@@ -8,6 +8,7 @@ import jsQR from "jsqr";
 import archiver from "archiver";
 import { PassThrough } from "stream";
 
+// CONFIGURATION
 const TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = 2067674349;
 const CHANNEL = "@StorylineArtNetwork";
@@ -18,6 +19,7 @@ const redis = new Redis({
   token: process.env.UPSTASH_REDIS_REST_TOKEN,
 });
 
+/* ────────────── MAIN HANDLER ────────────── */
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(200).send("System: Online");
   const update = req.body;
@@ -33,35 +35,40 @@ async function handleMessage(msg) {
   const chatId = msg.chat.id;
   const text = msg.text;
 
+  // USER TRACKING
   await redis.sadd("users", chatId);
   
+  // MEMBERSHIP CHECK
   if (!(await checkJoin(chatId))) {
     return sendMessage(chatId, `⛔ *Access Restricted*\n\nPlease join ${CHANNEL} to unlock all features.`);
   }
 
-  // ADMIN TOOLS
+  // ADMIN COMMANDS (Stats & Broadcast)
   if (chatId === ADMIN_ID) {
     if (text === "/stats") {
-      const total = await redis.scard("users");
-      return sendMessage(chatId, `📊 *STATS*\nTotal Users: ${total}`);
+      const totalUsers = await redis.scard("users");
+      return sendMessage(chatId, `📊 *BOT STATISTICS*\n\n👥 Total Users: ${totalUsers}\n⚙️ Engine: Gotenberg (Render)`);
     }
+    
     if (text?.startsWith("/broadcast ")) {
-      const m = text.replace("/broadcast ", "");
+      const broadcastMsg = text.replace("/broadcast ", "");
       const users = await redis.smembers("users");
-      let ok = 0;
+      let successCount = 0;
       for (const id of users) {
-        try { await sendMessage(id, `📢 *NOTIFICATION*\n\n${m}`); ok++; } catch(e) {}
+        try { 
+          await sendMessage(id, `📢 *NOTIFICATION*\n\n${broadcastMsg}`); 
+          successCount++;
+        } catch(e) { /* user blocked bot */ }
       }
-      return sendMessage(chatId, `✅ Sent to ${ok} users.`);
+      return sendMessage(chatId, `✅ Broadcast complete. Sent to ${successCount} users.`);
     }
   }
 
-  // START & WAKE-UP LOGIC
+  // START & MENU (Includes Render Wake-up)
   if (text === "/start" || text === "/menu") {
-    // Background ping to Render to wake up Gotenberg
-    axios.get(GOTENBERG_URL).catch(() => {}); 
-
-    return sendButtons(chatId, "💠 *FILE & IMAGE STUDIO*\n\nSend any file (Image, PDF, Word, EPUB) to begin. I've warmed up the engine for you!", [
+    axios.get(GOTENBERG_URL).catch(() => {}); // Background Wake-up Ping
+    
+    return sendButtons(chatId, "💠 *FILE & IMAGE STUDIO*\n\nSend an Image, PDF, or Document to start. I've warmed up the engine for you!", [
       [{ text: "🔳 Generate QR", callback_data: "qr_gen" }, { text: "📦 View Batch", callback_data: "m_batch" }],
       [{ text: "❓ Help & Guide", callback_data: "help" }]
     ]);
@@ -69,15 +76,16 @@ async function handleMessage(msg) {
 
   if (text === "/help") return sendHelp(chatId);
 
-  // QR GENERATOR
+  // QR GENERATOR STATE
   if ((await redis.get(`state:${chatId}`)) === "wait_qr" && text) {
     await redis.del(`state:${chatId}`);
     const buf = await QRCode.toBuffer(text);
     return sendFile(chatId, buf, "generated_qr.png");
   }
 
-  // FILE DETECTION
+  // FILE DETECTION LOGIC
   let fileId, menuTitle, buttons;
+
   if (msg.photo) {
     fileId = msg.photo.pop().file_id;
     menuTitle = "🖼 *IMAGE TOOLS*";
@@ -86,16 +94,18 @@ async function handleMessage(msg) {
       [{text:"🗜 Compress",callback_data:"menu_cmp"}, {text:"✨ Remove BG",callback_data:"remove_bg"}],
       [{text:"🔍 Read QR",callback_data:"qr_scan"}, {text:"➕ Add to ZIP",callback_data:"b_add"}]
     ];
-  } else if (msg.document) {
+  } 
+  else if (msg.document) {
     fileId = msg.document.file_id;
-    const n = msg.document.file_name.toLowerCase();
-    if (n.endsWith(".pdf")) {
+    const name = msg.document.file_name.toLowerCase();
+    
+    if (name.endsWith(".pdf")) {
       menuTitle = "📄 *PDF DETECTED*";
       buttons = [[{text:"PDF ➝ JPG",callback_data:"pdf_jpg"}, {text:"PDF ➝ DOCX",callback_data:"pdf_docx"}]];
-    } else if (n.endsWith(".docx") || n.endsWith(".doc")) {
+    } else if (name.endsWith(".docx") || name.endsWith(".doc")) {
       menuTitle = "📝 *WORD DETECTED*";
       buttons = [[{text:"DOCX ➝ PDF",callback_data:"doc_pdf"}]];
-    } else if (n.endsWith(".epub")) {
+    } else if (name.endsWith(".epub")) {
       menuTitle = "📚 *EPUB DETECTED*";
       buttons = [[{text:"EPUB ➝ PDF",callback_data:"epub_pdf"}]];
     }
@@ -112,16 +122,12 @@ async function handleCallback(query) {
   const chatId = query.message.chat.id;
   const action = query.data;
 
-  // Clear the "glowing" button state
   await axios.post(`https://api.telegram.org/bot${TOKEN}/answerCallbackQuery`, { callback_query_id: query.id });
 
   if (action === "help") return sendHelp(chatId);
-  
-  // Sub-Menus
   if (action === "menu_fmt") return sendButtons(chatId, "🔄 *Convert to:*", [[{text:"PNG",callback_data:"fmt_png"}, {text:"JPG",callback_data:"fmt_jpg"}, {text:"WEBP (File)",callback_data:"fmt_webp"}], [{text:"Sticker",callback_data:"fmt_sticker"}, {text:"PDF",callback_data:"fmt_pdf"}]]);
   if (action === "menu_res") return sendButtons(chatId, "📐 *Aspect Ratio:*", [[{text:"2:3 (Cover)",callback_data:"res_2:3"}, {text:"16:9 (Cinematic)",callback_data:"res_16:9"}], [{text:"1:1 (Square)",callback_data:"res_1:1"}, {text:"4:3 (Standard)",callback_data:"res_4:3"}]]);
   if (action === "menu_cmp") return sendButtons(chatId, "🗜 *Compression:*", [[{text:"High Qlty",callback_data:"cmp_80"}], [{text:"Medium",callback_data:"cmp_50"}], [{text:"Smallest Size",callback_data:"cmp_20"}]]);
-  
   if (action === "m_batch") return sendButtons(chatId, "📦 *Batch Queue:*", [[{text:"⬇️ Download ZIP",callback_data:"b_zip"},{text:"🗑 Clear",callback_data:"b_clr"}]]);
   if (action === "qr_gen") {
     await redis.set(`state:${chatId}`, "wait_qr", { ex: 300 });
@@ -136,12 +142,12 @@ async function handleCallback(query) {
 /* ────────────── TASK PROCESSOR ────────────── */
 async function processTask(chatId, action) {
   const fileId = await redis.get(`file:${chatId}`);
-  if (!fileId && !action.startsWith("b_")) return sendMessage(chatId, "⚠️ Session expired. Send the file again.");
+  if (!fileId && !action.startsWith("b_")) return sendMessage(chatId, "⚠️ Session expired.");
 
   try {
     const url = await getUrl(fileId);
 
-    // 1. QR SCANNER
+    // QR SCANNER
     if (action === "qr_scan") {
       const img = await axios.get(url, { responseType: 'arraybuffer' });
       const { data, info } = await sharp(img.data).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
@@ -149,10 +155,10 @@ async function processTask(chatId, action) {
       return sendMessage(chatId, code ? `✅ *RESULT:* \`${code.data}\`` : "❌ No QR code found.");
     }
 
-    // 2. BATCH ZIP LOGIC
+    // BATCH SYSTEM
     if (action === "b_add") {
       const len = await redis.llen(`batch:${chatId}`);
-      if (len >= 10) return sendMessage(chatId, "⛔ Batch Full (Max 10).");
+      if (len >= 10) return sendMessage(chatId, "⛔ Batch Full.");
       await redis.rpush(`batch:${chatId}`, fileId);
       return sendMessage(chatId, `✅ Added to Batch (${len + 1}/10).`);
     }
@@ -172,87 +178,87 @@ async function processTask(chatId, action) {
       return sendFile(chatId, stream, "Studio_Batch.zip");
     }
 
-    // 3. BACKGROUND REMOVAL (Requires remove.bg API key)
+    // BG REMOVAL
     if (action === "remove_bg") {
       const res = await axios.post("https://api.remove.bg/v1.0/removebg", { image_url: url, size: "auto" }, { headers: { "X-API-Key": process.env.REMOVE_BG_KEY }, responseType: 'arraybuffer' });
       return sendFile(chatId, Buffer.from(res.data), "No_BG.png");
     }
 
-    // 4. GOTENBERG DOCUMENT CONVERSION (Unlimited Free Tier)
+    // UNLIMITED PDF/DOC CONVERSION (RENDER FIX)
     if (["doc_pdf", "epub_pdf", "pdf_jpg", "pdf_docx"].includes(action)) {
       const form = new FormData();
-      const fileRes = await axios.get(url, { responseType: 'stream' });
+      const fileStream = await axios.get(url, { responseType: 'stream' });
       
-      let endpoint = "/forms/libreoffice/convert";
-      let fileName = "document.docx";
+      let endpoint = "/forms/libreoffice/convert"; 
+      let inputFileName = "document.docx";
 
       if (action.startsWith("pdf_")) {
-        endpoint = "/forms/pdfengines/convert"; // Simplified for PDF actions
-        fileName = "document.pdf";
+        inputFileName = "input.pdf";
+      } else if (action === "epub_pdf") {
+        inputFileName = "book.epub";
       }
 
-      form.append('files', fileRes.data, { filename: fileName });
+      form.append('files', fileStream.data, { filename: inputFileName });
       
       const res = await axios.post(`${GOTENBERG_URL}${endpoint}`, form, {
         headers: form.getHeaders(),
         responseType: 'arraybuffer'
       });
 
-      return sendFile(chatId, Buffer.from(res.data), `processed_file.${action.split('_')[1]}`);
+      return sendFile(chatId, Buffer.from(res.data), `Studio_Output.${action.split('_')[1]}`);
     }
 
-    // 5. IMAGE PROCESSING (Sharp)
-    const img = await axios.get(url, { responseType: 'arraybuffer' });
+    // IMAGE PROCESSING (SHARP)
+    const imgData = await axios.get(url, { responseType: 'arraybuffer' });
     let buf;
     
     if (action.startsWith("fmt_")) {
       const f = action.split("_")[1];
       if (f === "sticker") {
-        const stickerBuf = await sharp(img.data).resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp().toBuffer();
+        const sBuf = await sharp(imgData.data).resize(512,512,{fit:'contain',background:{r:0,g:0,b:0,alpha:0}}).webp().toBuffer();
         const sForm = new FormData();
         sForm.append("chat_id", chatId);
-        sForm.append("sticker", stickerBuf, { filename: "sticker.webp" });
+        sForm.append("sticker", sBuf, { filename: "sticker.webp" });
         return axios.post(`https://api.telegram.org/bot${TOKEN}/sendSticker`, sForm, { headers: sForm.getHeaders() });
       }
-      
-      if (f === "pdf") {
-        const pdf = await PDFDocument.create();
-        const emb = await pdf.embedJpg(img.data);
-        const pg = pdf.addPage([emb.width, emb.height]);
-        pg.drawImage(emb, { x: 0, y: 0, width: emb.width, height: emb.height });
-        buf = Buffer.from(await pdf.save());
-      } else {
-        buf = await sharp(img.data)[f]().toBuffer();
-      }
+      buf = (f === "pdf") ? await imageToPdf(imgData.data) : await sharp(imgData.data)[f]().toBuffer();
       return sendFile(chatId, buf, `Converted.${f}`);
     }
 
     if (action.startsWith("res_")) {
       const r = action.split("_")[1];
-      const m = await sharp(img.data).metadata();
+      const m = await sharp(imgData.data).metadata();
       let w = m.width, h = m.height;
       if (r === "2:3") { w/h > 2/3 ? w = Math.round(h*(2/3)) : h = Math.round(w*(3/2)); }
       else if (r === "16:9") { w/h > 16/9 ? w = Math.round(h*(16/9)) : h = Math.round(w*(9/16)); }
       else if (r === "1:1") { w = Math.min(w, h); h = w; }
-      buf = await sharp(img.data).resize(w, h, { fit: 'cover' }).jpeg().toBuffer();
+      buf = await sharp(imgData.data).resize(w, h, { fit: 'cover' }).jpeg().toBuffer();
       return sendFile(chatId, buf, `Resized_${r.replace(':','x')}.jpg`);
     }
 
     if (action.startsWith("cmp_")) {
       const qual = parseInt(action.split("_")[1]);
-      buf = await sharp(img.data).jpeg({ quality: qual }).toBuffer();
+      buf = await sharp(imgData.data).jpeg({ quality: qual }).toBuffer();
       return sendFile(chatId, buf, `Compressed.jpg`);
     }
 
   } catch (e) { 
     console.error("Task Error:", e.message);
-    sendMessage(chatId, "⚠️ *Engine Busy or Waking Up.*\n\nIf this is the first use in 15 mins, please wait 30 seconds and try again."); 
+    sendMessage(chatId, "⚠️ *Engine Error.* Render may be booting up or the file format is unsupported."); 
   }
 }
 
-/* ────────────── UTILITIES ────────────── */
+/* ────────────── HELPERS ────────────── */
+async function imageToPdf(data) {
+  const pdf = await PDFDocument.create();
+  const emb = await pdf.embedJpg(data);
+  const pg = pdf.addPage([emb.width, emb.height]);
+  pg.drawImage(emb, { x: 0, y: 0, width: emb.width, height: emb.height });
+  return Buffer.from(await pdf.save());
+}
+
 async function sendHelp(id) {
-  const h = "📖 *STUDIO GUIDE*\n\n1. *Images:* Send any photo to convert, resize, or compress.\n2. *Documents:* Send PDF, DOCX, or EPUB for conversion.\n3. *QR:* Scan by sending an image, or Generate via menu.\n4. *Batch:* Add images to queue and download as a single ZIP.";
+  const h = "📖 *STUDIO GUIDE*\n\n1. *Images:* Send any photo to convert, resize, or compress.\n2. *Documents:* PDF, DOCX, or EPUB conversion.\n3. *QR:* Scan image or Generate via menu.\n4. *Batch:* Add images to download as ZIP.";
   return sendMessage(id, h);
 }
 
@@ -281,4 +287,5 @@ async function sendMessage(id, text) {
 
 async function sendButtons(id, text, buttons) {
   return axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`, { chat_id: id, text, parse_mode: "Markdown", reply_markup: { inline_keyboard: buttons } });
-          }
+}
+
