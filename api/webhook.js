@@ -9,106 +9,152 @@ let users = new Set();
 
 export default async function handler(req, res) {
 
-if (req.method !== "POST") {
-return res.status(200).send("Bot running");
-}
+  if (req.method !== "POST") {
+    return res.status(200).send("Bot running");
+  }
 
-const update = req.body;
+  const update = req.body;
 
-try {
+  try {
 
-/* ---------------- MESSAGE ---------------- */
+    /* MESSAGE HANDLER */
 
-if(update.message){
+    if (update.message) {
 
-const chatId = update.message.chat.id;
+      const chatId = update.message.chat.id;
+      users.add(chatId);
 
-users.add(chatId);
+      /* START COMMAND */
 
-/* -------- START MESSAGE -------- */
+      if (update.message.text === "/start") {
 
-if(update.message.text === "/start"){
+        await axios.post(
+          `https://api.telegram.org/bot${TOKEN}/sendMessage`,
+          {
+            chat_id: chatId,
+            text:
+              "👋 Welcome to File Converter Bot\n\nSend an image and choose format:\n\nPNG\nJPG\nWEBP"
+          }
+        );
 
-await axios.post(
-`https://api.telegram.org/bot${TOKEN}/sendMessage`,
-{
-chat_id: chatId,
-text:
-`👋 Welcome to File Converter Bot
+      }
 
-Send me an image and I will convert it to:
+      /* BROADCAST COMMAND */
 
-🟢 PNG
-🟢 JPG
-🟢 WEBP
+      if (update.message.text?.startsWith("/broadcast")) {
 
-Just send a photo to begin.`
-}
-);
+        if (chatId !== ADMIN_ID) {
+          return res.status(200).send("ok");
+        }
 
-}
+        const message = update.message.text.replace("/broadcast ", "");
 
-/* -------- BROADCAST -------- */
+        for (const id of users) {
 
-if(update.message.text?.startsWith("/broadcast")){
+          try {
 
-if(chatId !== ADMIN_ID){
-return res.status(200).send("ok");
-}
+            await axios.post(
+              `https://api.telegram.org/bot${TOKEN}/sendMessage`,
+              {
+                chat_id: id,
+                text: message
+              }
+            );
 
-const message = update.message.text.replace("/broadcast ","");
+          } catch (e) {}
 
-for(const id of users){
+        }
 
-try{
+      }
 
-await axios.post(
-`https://api.telegram.org/bot${TOKEN}/sendMessage`,
-{
-chat_id:id,
-text:message
-}
-);
+      /* IMAGE RECEIVED */
 
-}catch(e){}
+      if (update.message.photo) {
 
-}
+        const fileId = update.message.photo.pop().file_id;
 
-}
+        userFiles[chatId] = fileId;
 
-/* -------- IMAGE RECEIVED -------- */
+        await axios.post(
+          `https://api.telegram.org/bot${TOKEN}/sendMessage`,
+          {
+            chat_id: chatId,
+            text: "Choose format:",
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "PNG", callback_data: "png" }],
+                [{ text: "JPG", callback_data: "jpg" }],
+                [{ text: "WEBP", callback_data: "webp" }]
+              ]
+            }
+          }
+        );
 
-if(update.message.photo){
+      }
 
-const fileId = update.message.photo.pop().file_id;
+    }
 
-userFiles[chatId] = fileId;
+    /* BUTTON CLICK */
 
-await axios.post(
-`https://api.telegram.org/bot${TOKEN}/sendMessage`,
-{
-chat_id:chatId,
-text:"Choose format:",
-reply_markup:{
-inline_keyboard:[
-[{text:"PNG",callback_data:"png"}],
-[{text:"JPG",callback_data:"jpg"}],
-[{text:"WEBP",callback_data:"webp"}]
-]
-}
-}
-);
+    if (update.callback_query) {
 
-}
+      const chatId = update.callback_query.message.chat.id;
+      const format = update.callback_query.data;
+      const fileId = userFiles[chatId];
 
-}
+      const fileInfo = await axios.get(
+        `https://api.telegram.org/bot${TOKEN}/getFile?file_id=${fileId}`
+      );
 
-/* ---------------- BUTTON CLICK ---------------- */
+      const filePath = fileInfo.data.result.file_path;
 
-if(update.callback_query){
+      const fileUrl =
+        `https://api.telegram.org/file/bot${TOKEN}/${filePath}`;
 
-const chatId = update.callback_query.message.chat.id;
-const format = update.callback_query.data;
+      const image = await axios.get(fileUrl, {
+        responseType: "arraybuffer"
+      });
+
+      let output;
+
+      if (format === "png") {
+        output = await sharp(image.data).png().toBuffer();
+      }
+
+      if (format === "jpg") {
+        output = await sharp(image.data).jpeg().toBuffer();
+      }
+
+      if (format === "webp") {
+        output = await sharp(image.data).webp().toBuffer();
+      }
+
+      const formData = new FormData();
+
+      formData.append("chat_id", chatId);
+
+      formData.append(
+        "document",
+        new Blob([output], { type: "application/octet-stream" }),
+        `converted.${format}`
+      );
+
+      await axios.post(
+        `https://api.telegram.org/bot${TOKEN}/sendDocument`,
+        formData
+      );
+
+    }
+
+  } catch (e) {
+
+    console.log(e.message);
+
+  }
+
+  res.status(200).send("ok");
+
+}const format = update.callback_query.data;
 
 const fileId = userFiles[chatId];
 
