@@ -1,14 +1,12 @@
 import axios from "axios";
 import sharp from "sharp";
 import FormData from "form-data";
-import fs from "fs";
 
 const TOKEN = process.env.BOT_TOKEN;
-
-// PUT YOUR TELEGRAM USER ID HERE
-const ADMIN_ID = 2067674349;
+const ADMIN_ID = 2067674349; // replace with your Telegram ID
 
 let userFiles = {};
+let users = new Set();
 
 export default async function handler(req, res) {
 
@@ -24,22 +22,9 @@ if(update.message){
 
 const chatId = update.message.chat.id;
 
-/* ---------------- SAVE USERS ---------------- */
+users.add(chatId);
 
-let users = [];
-
-try{
-users = JSON.parse(fs.readFileSync("users.json"));
-}catch{
-users = [];
-}
-
-if(!users.includes(chatId)){
-users.push(chatId);
-fs.writeFileSync("users.json", JSON.stringify(users));
-}
-
-/* ---------------- BROADCAST COMMAND ---------------- */
+/* BROADCAST COMMAND */
 
 if(update.message.text?.startsWith("/broadcast")){
 
@@ -62,7 +47,7 @@ text:message
 
 }
 
-/* ---------------- IMAGE RECEIVED ---------------- */
+/* IMAGE RECEIVED */
 
 if(update.message.photo){
 
@@ -86,7 +71,7 @@ inline_keyboard:[
 
 }
 
-/* ---------------- BUTTON CLICK ---------------- */
+/* BUTTON CLICK */
 
 if(update.callback_query){
 
@@ -109,6 +94,38 @@ if(format==="png"){
 output = await sharp(image.data).png().toBuffer();
 }
 
+if(format==="jpg"){
+output = await sharp(image.data).jpeg().toBuffer();
+}
+
+if(format==="webp"){
+output = await sharp(image.data).webp().toBuffer();
+}
+
+const form = new FormData();
+
+form.append("chat_id",chatId);
+
+form.append("document",output,{
+filename:`converted.${format}`,
+contentType:`image/${format}`
+});
+
+await axios.post(
+`https://api.telegram.org/bot${TOKEN}/sendDocument`,
+form,
+{headers:form.getHeaders()}
+);
+
+}
+
+}catch(e){
+console.log(e);
+}
+
+res.status(200).send("ok");
+
+}
 if(format==="jpg"){
 output = await sharp(image.data).jpeg().toBuffer();
 }
