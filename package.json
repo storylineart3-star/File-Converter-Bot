@@ -1,5 +1,5 @@
 {
-  "name": "file-converter-bot",
+  "name": "bot",
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
