@@ -2,159 +2,112 @@ import axios from "axios";
 import sharp from "sharp";
 
 const TOKEN = process.env.BOT_TOKEN;
-const ADMIN_ID = 2067674349; // replace with your Telegram ID
+const ADMIN_ID = 123456789; // replace with your Telegram ID
 
 let userFiles = {};
 let users = new Set();
 
 export default async function handler(req, res) {
 
-  if (req.method !== "POST") {
-    return res.status(200).send("Bot running");
-  }
+if (req.method !== "POST") {
+return res.status(200).send("Bot running");
+}
 
-  const update = req.body;
+const update = req.body;
 
-  try {
+try {
 
-    /* MESSAGE HANDLER */
+/* ---------------- MESSAGE HANDLER ---------------- */
 
-    if (update.message) {
+if(update.message){
 
-      const chatId = update.message.chat.id;
-      users.add(chatId);
+const chatId = update.message.chat.id;
 
-      /* START COMMAND */
+users.add(chatId);
 
-      if (update.message.text === "/start") {
+/* -------- START MESSAGE -------- */
 
-        await axios.post(
-          `https://api.telegram.org/bot${TOKEN}/sendMessage`,
-          {
-            chat_id: chatId,
-            text:
-              "👋 Welcome to File Converter Bot\n\nSend an image and choose format:\n\nPNG\nJPG\nWEBP"
-          }
-        );
+if(update.message.text === "/start"){
 
-      }
+await axios.post(
+`https://api.telegram.org/bot${TOKEN}/sendMessage`,
+{
+chat_id:chatId,
+text:`👋 Welcome to File Converter Bot
 
-      /* BROADCAST COMMAND */
+Send an image and choose format:
 
-      if (update.message.text?.startsWith("/broadcast")) {
+🟢 PNG
+🟢 JPG
+🟢 WEBP
 
-        if (chatId !== ADMIN_ID) {
-          return res.status(200).send("ok");
-        }
+Just send a photo to start converting.`
+}
+);
 
-        const message = update.message.text.replace("/broadcast ", "");
+}
 
-        for (const id of users) {
+/* -------- BROADCAST -------- */
 
-          try {
+if(update.message.text?.startsWith("/broadcast")){
 
-            await axios.post(
-              `https://api.telegram.org/bot${TOKEN}/sendMessage`,
-              {
-                chat_id: id,
-                text: message
-              }
-            );
+if(chatId !== ADMIN_ID){
+return res.status(200).send("ok");
+}
 
-          } catch (e) {}
+const message = update.message.text.replace("/broadcast ","");
 
-        }
+for(const id of users){
 
-      }
+try{
 
-      /* IMAGE RECEIVED */
+await axios.post(
+`https://api.telegram.org/bot${TOKEN}/sendMessage`,
+{
+chat_id:id,
+text:message
+}
+);
 
-      if (update.message.photo) {
+}catch(e){}
 
-        const fileId = update.message.photo.pop().file_id;
+}
 
-        userFiles[chatId] = fileId;
+}
 
-        await axios.post(
-          `https://api.telegram.org/bot${TOKEN}/sendMessage`,
-          {
-            chat_id: chatId,
-            text: "Choose format:",
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "PNG", callback_data: "png" }],
-                [{ text: "JPG", callback_data: "jpg" }],
-                [{ text: "WEBP", callback_data: "webp" }]
-              ]
-            }
-          }
-        );
+/* -------- IMAGE RECEIVED -------- */
 
-      }
+if(update.message.photo){
 
-    }
+const fileId = update.message.photo.pop().file_id;
 
-    /* BUTTON CLICK */
+userFiles[chatId] = fileId;
 
-    if (update.callback_query) {
+await axios.post(
+`https://api.telegram.org/bot${TOKEN}/sendMessage`,
+{
+chat_id:chatId,
+text:"Choose format:",
+reply_markup:{
+inline_keyboard:[
+[{text:"PNG",callback_data:"png"}],
+[{text:"JPG",callback_data:"jpg"}],
+[{text:"WEBP",callback_data:"webp"}]
+]
+}
+}
+);
 
-      const chatId = update.callback_query.message.chat.id;
-      const format = update.callback_query.data;
-      const fileId = userFiles[chatId];
+}
 
-      const fileInfo = await axios.get(
-        `https://api.telegram.org/bot${TOKEN}/getFile?file_id=${fileId}`
-      );
+}
 
-      const filePath = fileInfo.data.result.file_path;
+/* ---------------- BUTTON CLICK ---------------- */
 
-      const fileUrl =
-        `https://api.telegram.org/file/bot${TOKEN}/${filePath}`;
+if(update.callback_query){
 
-      const image = await axios.get(fileUrl, {
-        responseType: "arraybuffer"
-      });
-
-      let output;
-
-      if (format === "png") {
-        output = await sharp(image.data).png().toBuffer();
-      }
-
-      if (format === "jpg") {
-        output = await sharp(image.data).jpeg().toBuffer();
-      }
-
-      if (format === "webp") {
-        output = await sharp(image.data).webp().toBuffer();
-      }
-
-      const formData = new FormData();
-
-      formData.append("chat_id", chatId);
-
-      formData.append(
-        "document",
-        new Blob([output], { type: "application/octet-stream" }),
-        `converted.${format}`
-      );
-
-      await axios.post(
-        `https://api.telegram.org/bot${TOKEN}/sendDocument`,
-        formData
-      );
-
-    }
-
-  } catch (e) {
-
-    console.log(e.message);
-
-  }
-
-  res.status(200).send("ok");
-
-}const format = update.callback_query.data;
+const chatId = update.callback_query.message.chat.id;
+const format = update.callback_query.data;
 
 const fileId = userFiles[chatId];
 
@@ -185,41 +138,6 @@ if(format==="webp"){
 output = await sharp(image.data).webp().toBuffer();
 }
 
-/* -------- SEND FILE -------- */
-
-const formData = new FormData();
-
-formData.append("chat_id", chatId);
-
-formData.append(
-"document",
-new Blob([output], { type: "application/octet-stream" }),
-`converted.${format}`
-);
-
-await axios.post(
-`https://api.telegram.org/bot${TOKEN}/sendDocument`,
-formData
-);
-
-}
-
-}catch(e){
-
-console.log(e.message);
-
-}
-
-res.status(200).send("ok");
-
-}if(format==="jpg"){
-output = await sharp(image.data).jpeg().toBuffer();
-}
-
-if(format==="webp"){
-output = await sharp(image.data).webp().toBuffer();
-}
-
 /* -------- SEND FILE BACK -------- */
 
 const formData = new FormData();
@@ -228,7 +146,7 @@ formData.append("chat_id", chatId);
 
 formData.append(
 "document",
-new Blob([output]),
+new Blob([output], { type: "application/octet-stream" }),
 `converted.${format}`
 );
 
