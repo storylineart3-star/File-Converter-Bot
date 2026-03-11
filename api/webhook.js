@@ -1,8 +1,12 @@
 import axios from "axios";
 import sharp from "sharp";
 import FormData from "form-data";
+import fs from "fs";
 
 const TOKEN = process.env.BOT_TOKEN;
+
+// PUT YOUR TELEGRAM USER ID HERE
+const ADMIN_ID = 2067674349;
 
 let userFiles = {};
 
@@ -19,6 +23,46 @@ try {
 if(update.message){
 
 const chatId = update.message.chat.id;
+
+/* ---------------- SAVE USERS ---------------- */
+
+let users = [];
+
+try{
+users = JSON.parse(fs.readFileSync("users.json"));
+}catch{
+users = [];
+}
+
+if(!users.includes(chatId)){
+users.push(chatId);
+fs.writeFileSync("users.json", JSON.stringify(users));
+}
+
+/* ---------------- BROADCAST COMMAND ---------------- */
+
+if(update.message.text?.startsWith("/broadcast")){
+
+if(chatId !== ADMIN_ID){
+return res.status(200).send("ok");
+}
+
+const message = update.message.text.replace("/broadcast ","");
+
+for(const id of users){
+
+try{
+await axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`,{
+chat_id:id,
+text:message
+});
+}catch{}
+
+}
+
+}
+
+/* ---------------- IMAGE RECEIVED ---------------- */
 
 if(update.message.photo){
 
@@ -42,13 +86,17 @@ inline_keyboard:[
 
 }
 
+/* ---------------- BUTTON CLICK ---------------- */
+
 if(update.callback_query){
 
 const chatId = update.callback_query.message.chat.id;
 const format = update.callback_query.data;
+
 const fileId = userFiles[chatId];
 
 const fileInfo = await axios.get(`https://api.telegram.org/bot${TOKEN}/getFile?file_id=${fileId}`);
+
 const filePath = fileInfo.data.result.file_path;
 
 const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${filePath}`;
@@ -72,7 +120,11 @@ output = await sharp(image.data).webp().toBuffer();
 const form = new FormData();
 
 form.append("chat_id",chatId);
-form.append("document",output,{filename:`converted.${format}`});
+
+form.append("document",output,{
+filename:`converted.${format}`,
+contentType:`image/${format}`
+});
 
 await axios.post(
 `https://api.telegram.org/bot${TOKEN}/sendDocument`,
@@ -82,7 +134,9 @@ form,
 
 }
 
-} catch(e){}
+}catch(e){
+console.log(e);
+}
 
 res.status(200).send("ok");
 
