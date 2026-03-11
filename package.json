@@ -1,26 +1,15 @@
 {
   "name": "telegram-file-converter",
   "version": "1.0.0",
-  "description": "Telegram Image & File Converter Bot with Resize, PDF, Sticker, and Redis Stats",
+  "description": "Telegram file converter bot",
   "main": "api/webhook.js",
   "type": "module",
-  "scripts": {
-    "start": "node api/webhook.js"
-  },
-  "keywords": [
-    "telegram-bot",
-    "image-converter",
-    "telegram",
-    "vercel-bot"
-  ],
-  "author": "",
-  "license": "MIT",
   "dependencies": {
-    "@upstash/redis": "^1.28.0",
     "axios": "^1.6.0",
     "form-data": "^4.0.0",
-    "mammoth": "^1.6.0",
+    "jimp": "^0.22.10",
     "pdf-lib": "^1.17.1",
-    "sharp": "^0.33.0"
+    "mammoth": "^1.6.0",
+    "@upstash/redis": "^1.28.0"
   }
 }
