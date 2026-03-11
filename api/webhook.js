@@ -20,7 +20,7 @@ const redis = new Redis({
 });
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") return res.status(200).send("Status: Online");
+  if (req.method !== "POST") return res.status(200).send("System: Online");
   const update = req.body;
   try {
     if (update.message) await handleMessage(update.message);
@@ -34,11 +34,39 @@ async function handleMessage(msg) {
   const chatId = msg.chat.id;
   const text = msg.text;
 
+  // USER TRACKING
   await redis.sadd("users", chatId);
-  if (!(await checkJoin(chatId))) return sendMessage(chatId, `⛔ *Access Restricted*\n\nPlease join ${CHANNEL} to unlock all features.`);
+  
+  if (!(await checkJoin(chatId))) {
+    return sendMessage(chatId, `⛔ *Access Restricted*\n\nPlease join ${CHANNEL} to unlock all features.`);
+  }
 
+  // ADMIN COMMANDS (Stats & Broadcast)
+  if (chatId === ADMIN_ID) {
+    if (text === "/stats") {
+      const totalUsers = await redis.scard("users");
+      const dailyKey = `limit:${new Date().toISOString().split('T')[0]}`;
+      const dailyConverts = await redis.get(dailyKey) || 0;
+      return sendMessage(chatId, `📊 *BOT STATISTICS*\n\n👥 Total Users: ${totalUsers}\n🔄 Daily API Conversions: ${dailyConverts}/25`);
+    }
+    
+    if (text?.startsWith("/broadcast ")) {
+      const broadcastMsg = text.replace("/broadcast ", "");
+      const users = await redis.smembers("users");
+      let successCount = 0;
+      for (const id of users) {
+        try { 
+          await sendMessage(id, `📢 *NOTIFICATION*\n\n${broadcastMsg}`); 
+          successCount++;
+        } catch(e) { /* user blocked bot */ }
+      }
+      return sendMessage(chatId, `✅ Broadcast complete. Sent to ${successCount} users.`);
+    }
+  }
+
+  // STANDARD COMMANDS
   if (text === "/start" || text === "/menu") {
-    return sendButtons(chatId, "💠 *FILE STUDIO V1.0*\n\nSend me an Image, PDF, or Document to start. You can also generate codes or manage your batch below.", [
+    return sendButtons(chatId, "💠 *FILE STUDIO V1.0*\n\nSend an Image, PDF, or Document to start. You can also use the tools below:", [
       [{ text: "🔳 Generate QR", callback_data: "qr_gen" }, { text: "📦 View Batch", callback_data: "m_batch" }],
       [{ text: "❓ Help & Guide", callback_data: "help" }]
     ]);
@@ -46,12 +74,14 @@ async function handleMessage(msg) {
 
   if (text === "/help") return sendHelp(chatId);
 
+  // QR GENERATOR STATE
   if ((await redis.get(`state:${chatId}`)) === "wait_qr" && text) {
     await redis.del(`state:${chatId}`);
     const buf = await QRCode.toBuffer(text);
     return sendFile(chatId, buf, "generated_qr.png");
   }
 
+  // FILE DETECTION LOGIC
   let fileId, menuTitle, buttons;
 
   if (msg.photo) {
@@ -84,16 +114,17 @@ async function handleMessage(msg) {
     return sendButtons(chatId, menuTitle, buttons);
   }
 }
-
 /* ────────────── CALLBACK HANDLER ────────────── */
 async function handleCallback(query) {
   const chatId = query.message.chat.id;
   const action = query.data;
 
-  // FIX: Clear the "glowing" state immediately
+  // Clear the "glowing" loading state immediately
   await axios.post(`https://api.telegram.org/bot${TOKEN}/answerCallbackQuery`, { callback_query_id: query.id });
 
   if (action === "help") return sendHelp(chatId);
+  
+  // Sub-Menus
   if (action === "menu_fmt") return sendButtons(chatId, "🔄 *Convert to:*", [[{text:"PNG",callback_data:"fmt_png"}, {text:"JPG",callback_data:"fmt_jpg"}, {text:"WEBP (File)",callback_data:"fmt_webp"}], [{text:"Sticker",callback_data:"fmt_sticker"}, {text:"PDF",callback_data:"fmt_pdf"}]]);
   if (action === "menu_res") return sendButtons(chatId, "📐 *Aspect Ratio:*", [[{text:"2:3 (Cover)",callback_data:"res_2:3"}, {text:"16:9 (Cinematic)",callback_data:"res_16:9"}], [{text:"1:1 (Square)",callback_data:"res_1:1"}, {text:"4:3 (Standard)",callback_data:"res_4:3"}]]);
   if (action === "menu_cmp") return sendButtons(chatId, "🗜 *Compression:*", [[{text:"High Qlty",callback_data:"cmp_80"}], [{text:"Medium",callback_data:"cmp_50"}], [{text:"Smallest Size",callback_data:"cmp_20"}]]);
@@ -117,9 +148,10 @@ async function processTask(chatId, action) {
   try {
     const url = await getUrl(fileId);
 
-    // Limit Logic for Premium APIs
+    // Limit Logic for Premium APIs (ConvertAPI & Remove.bg)
     if (action.includes("_") && !["fmt","res","cmp"].includes(action.split('_')[0])) {
-      const used = await redis.incr(`limit:${new Date().toISOString().split('T')[0]}`);
+      const dayKey = `limit:${new Date().toISOString().split('T')[0]}`;
+      const used = await redis.incr(dayKey);
       if (used > 25 && chatId !== ADMIN_ID) return sendMessage(chatId, "⚠️ Daily limit reached. Admins have unlimited access.");
     }
 
@@ -132,20 +164,21 @@ async function processTask(chatId, action) {
 
     if (action === "b_add") {
       const len = await redis.llen(`batch:${chatId}`);
-      if (len >= 10) return sendMessage(chatId, "⛔ Batch Full.");
+      if (len >= 10) return sendMessage(chatId, "⛔ Batch Full (Max 10).");
       await redis.rpush(`batch:${chatId}`, fileId);
-      return sendMessage(chatId, `✅ Added (${len + 1}/10).`);
+      return sendMessage(chatId, `✅ Added to Batch (${len + 1}/10).`);
     }
 
     if (action === "b_zip") {
       const ids = await redis.lrange(`batch:${chatId}`, 0, -1);
+      if (!ids.length) return sendMessage(chatId, "⚠️ Batch is empty.");
       const archive = archiver('zip');
       const stream = new PassThrough();
       archive.pipe(stream);
       for (const [i, id] of ids.entries()) {
         const u = await getUrl(id);
         const r = await axios.get(u, { responseType: 'arraybuffer' });
-        archive.append(r.data, { name: `file_${i+1}.jpg` });
+        archive.append(r.data, { name: `image_${i+1}.jpg` });
       }
       archive.finalize();
       return sendFile(chatId, stream, "Studio_Batch.zip");
@@ -156,6 +189,7 @@ async function processTask(chatId, action) {
       return sendFile(chatId, Buffer.from(res.data), "No_BG.png");
     }
 
+    // Document Conversions via ConvertAPI
     if (action.includes("_") && !["fmt","res","cmp"].includes(action.split('_')[0])) {
       const [from, to] = action.split("_");
       const res = await convertapi.convert(to, { File: url }, from);
@@ -163,12 +197,20 @@ async function processTask(chatId, action) {
       return sendFile(chatId, Buffer.from(data.data), `converted.${to}`);
     }
 
+    // Image Processing via Sharp
     const img = await axios.get(url, { responseType: 'arraybuffer' });
     let buf;
     
     if (action.startsWith("fmt_")) {
       const f = action.split("_")[1];
-      if (f === "sticker") return axios.post(`https://api.telegram.org/bot${TOKEN}/sendSticker`, { chat_id: chatId, sticker: url });
+      if (f === "sticker") {
+        const stickerBuf = await sharp(img.data).resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp().toBuffer();
+        const form = new FormData();
+        form.append("chat_id", chatId);
+        form.append("sticker", stickerBuf, { filename: "sticker.webp" });
+        return axios.post(`https://api.telegram.org/bot${TOKEN}/sendSticker`, form, { headers: form.getHeaders() });
+      }
+      
       if (f === "pdf") {
         const pdf = await PDFDocument.create();
         const emb = await pdf.embedJpg(img.data);
@@ -189,20 +231,24 @@ async function processTask(chatId, action) {
       else if (r === "16:9") { w/h > 16/9 ? w = Math.round(h*(16/9)) : h = Math.round(w*(9/16)); }
       else if (r === "1:1") { w = Math.min(w, h); h = w; }
       buf = await sharp(img.data).resize(w, h, { fit: 'cover' }).jpeg().toBuffer();
-      return sendFile(chatId, buf, `Resized_${r}.jpg`);
+      return sendFile(chatId, buf, `Resized_${r.replace(':','x')}.jpg`);
     }
 
     if (action.startsWith("cmp_")) {
-      buf = await sharp(img.data).jpeg({ quality: parseInt(action.split("_")[1]) }).toBuffer();
+      const qual = parseInt(action.split("_")[1]);
+      buf = await sharp(img.data).jpeg({ quality: qual }).toBuffer();
       return sendFile(chatId, buf, `Compressed.jpg`);
     }
 
-  } catch (e) { sendMessage(chatId, "⚠️ Error: File too complex or API limit reached."); }
+  } catch (e) { 
+    console.error(e);
+    sendMessage(chatId, "⚠️ Error: Processing failed. Check file size or API limits."); 
+  }
 }
 
-/* ────────────── HELPERS ────────────── */
+/* ────────────── UTILITIES ────────────── */
 async function sendHelp(id) {
-  const h = "📖 *STUDIO GUIDE*\n\n1. *Images:* Send any photo to convert, resize, or compress.\n2. *PDF/Docs:* Send documents for format switching.\n3. *QR:* Send a photo to scan, or use the menu to create one.\n4. *Batch:* Add up to 10 images and download as one ZIP.";
+  const h = "📖 *STUDIO GUIDE*\n\n1. *Images:* Send any photo to convert, resize, or compress.\n2. *PDF/Docs:* Send documents for format switching.\n3. *QR:* Scan by sending a photo, or use menu to create.\n4. *Batch:* Add 1-10 images to queue and download as ZIP.";
   return sendMessage(id, h);
 }
 
@@ -231,5 +277,5 @@ async function sendMessage(id, text) {
 
 async function sendButtons(id, text, buttons) {
   return axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`, { chat_id: id, text, parse_mode: "Markdown", reply_markup: { inline_keyboard: buttons } });
-}
+  }
 
