@@ -2,7 +2,6 @@
   "name": "file-converter-bot",
   "version": "1.0.0",
   "type": "module",
-  "main": "api/webhook.js",
   "dependencies": {
     "@upstash/redis": "^1.28.4",
     "archiver": "^7.0.1",
@@ -15,3 +14,4 @@
     "sharp": "^0.33.2"
   }
 }
+
