@@ -14,6 +14,7 @@ const ADMIN_ID = 2067674349;
 const CHANNEL = "@StorylineArtNetwork";
 const GOTENBERG_URL = "https://storyline-studio-engine.onrender.com";
 const REMBG_URL = "https://storylineart3-rembg-api.hf.space/api/remove";
+const TASK_TIMEOUT = 45000; // 45 Seconds timeout
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -41,6 +42,7 @@ async function handleMessage(msg) {
     return sendMessage(chatId, `⛔ *Access Restricted*\n\nPlease join ${CHANNEL} to unlock all features.`);
   }
 
+  // ADMIN STATS
   if (chatId === ADMIN_ID && text === "/stats") {
     const total = await redis.scard("users");
     const stats = await redis.hgetall("feature_stats") || {};
@@ -51,9 +53,10 @@ async function handleMessage(msg) {
     return sendMessage(chatId, statMsg);
   }
 
+  // WELCOME MESSAGE
   if (text === "/start" || text === "/menu") {
-    axios.get(GOTENBERG_URL).catch(() => {});
-    axios.get(REMBG_URL.replace("/api/remove", "")).catch(() => {});
+    axios.get(GOTENBERG_URL, { timeout: 5000 }).catch(() => {});
+    axios.get(REMBG_URL.replace("/api/remove", ""), { timeout: 5000 }).catch(() => {});
 
     const welcome = "👋 *Welcome to Storyline Art Studio!*\n\nI am your all-in-one file assistant. Send me any file to begin:\n\n" +
       "🖼 *Images:* Remove BG, Resize, Convert, or Compress.\n" +
@@ -67,12 +70,14 @@ async function handleMessage(msg) {
     ]);
   }
 
+  // QR STATE
   if ((await redis.get(`state:${chatId}`)) === "wait_qr" && text) {
     await redis.del(`state:${chatId}`);
     const buf = await QRCode.toBuffer(text);
     return sendFile(chatId, buf, "generated_qr.png");
   }
 
+  // FILE DETECTION
   let fileId, menuTitle, buttons;
   if (msg.photo) {
     fileId = msg.photo.pop().file_id;
@@ -135,37 +140,43 @@ async function processTask(chatId, action) {
     const url = await getUrl(fileId);
     await redis.hincrby("feature_stats", action.split("_")[0], 1);
 
-    // 1. BG REMOVAL
+    // 1. BG REMOVAL (With Timeout)
     if (action === "remove_bg") {
-      const imgBuffer = await axios.get(url, { responseType: 'arraybuffer' });
+      const imgBuffer = await axios.get(url, { responseType: 'arraybuffer', timeout: TASK_TIMEOUT });
       const form = new FormData();
       form.append('file', imgBuffer.data, { filename: 'image.png' });
-      const res = await axios.post(REMBG_URL, form, { headers: form.getHeaders(), responseType: 'arraybuffer' });
+      const res = await axios.post(REMBG_URL, form, { 
+        headers: form.getHeaders(), 
+        responseType: 'arraybuffer',
+        timeout: TASK_TIMEOUT 
+      });
       await sendFile(chatId, Buffer.from(res.data), "No_BG.png");
     }
 
-    // 2. CONVERSIONS (PDF, DOCX, EPUB, TXT)
+    // 2. CONVERSIONS (With Timeout)
     else if (["doc_pdf", "pdf_jpg", "pdf_docx", "to_txt"].includes(action)) {
       const form = new FormData();
-      const fileData = await axios.get(url, { responseType: 'arraybuffer' });
-      
+      const fileData = await axios.get(url, { responseType: 'arraybuffer', timeout: TASK_TIMEOUT });
       const fileInfo = await axios.get(`https://api.telegram.org/bot${TOKEN}/getFile?file_id=${fileId}`);
       const originalExt = fileInfo.data.result.file_path.split('.').pop();
       
       form.append('files', Buffer.from(fileData.data), { filename: `input.${originalExt}` });
       
-      // Handle the output extension
       let outExt = action.split('_')[1];
       if (action === "to_txt") outExt = "txt";
       if (action === "doc_pdf") outExt = "pdf";
 
-      const res = await axios.post(`${GOTENBERG_URL}/forms/libreoffice/convert`, form, { headers: form.getHeaders(), responseType: 'arraybuffer' });
+      const res = await axios.post(`${GOTENBERG_URL}/forms/libreoffice/convert`, form, { 
+        headers: form.getHeaders(), 
+        responseType: 'arraybuffer',
+        timeout: TASK_TIMEOUT 
+      });
       await sendFile(chatId, Buffer.from(res.data), `Studio_Result.${outExt}`);
     }
 
-    // 3. IMAGE TOOLS (SHARP) - Fixed Resizer & WebP/Sticker
+    // 3. IMAGE TOOLS
     else if (action.startsWith("fmt_") || action.startsWith("res_") || action.startsWith("cmp_")) {
-      const imgRes = await axios.get(url, { responseType: 'arraybuffer' });
+      const imgRes = await axios.get(url, { responseType: 'arraybuffer', timeout: TASK_TIMEOUT });
       const imgData = Buffer.from(imgRes.data);
       
       if (action === "fmt_sticker") {
@@ -182,11 +193,9 @@ async function processTask(chatId, action) {
           const r = action.split("_")[1];
           const meta = await sharp(imgData).metadata();
           let w = meta.width, h = meta.height;
-          
           if (r === "2:3") { w/h > 2/3 ? w = Math.round(h*(2/3)) : h = Math.round(w*(3/2)); }
           else if (r === "16:9") { w/h > 16/9 ? w = Math.round(h*(16/9)) : h = Math.round(w*(9/16)); }
           else if (r === "1:1") { w > h ? w = h : h = w; }
-          
           pipeline = pipeline.resize(w, h, { fit: 'cover' });
         }
         if (action.startsWith("cmp_")) {
@@ -214,9 +223,12 @@ async function processTask(chatId, action) {
     await axios.post(`https://api.telegram.org/bot${TOKEN}/deleteMessage`, { chat_id: chatId, message_id: proc.data.result.message_id });
 
   } catch (e) {
+    let errorMsg = "⚠️ *Error:* Process failed. Please try again.";
+    if (e.code === 'ECONNABORTED') errorMsg = "🕒 *Timeout:* The process took too long. Please try a smaller file or try again later.";
+    
     await axios.post(`https://api.telegram.org/bot${TOKEN}/editMessageText`, {
       chat_id: chatId, message_id: proc.data.result.message_id,
-      text: "⚠️ *Error:* Conversion failed. Please ensure the file is not corrupted."
+      text: errorMsg, parse_mode: "Markdown"
     });
   }
 }
@@ -235,7 +247,7 @@ async function sendSticker(chatId, buffer) {
   return axios.post(`https://api.telegram.org/bot${TOKEN}/sendSticker`, f, { headers: f.getHeaders() });
 }
 async function checkJoin(id) {
-  try { const r = await axios.get(`https://api.telegram.org/getChatMember?chat_id=${CHANNEL}&user_id=${id}`);
+  try { const r = await axios.get(`https://api.telegram.org/bot${TOKEN}/getChatMember?chat_id=${CHANNEL}&user_id=${id}`);
   return ["member", "administrator", "creator"].includes(r.data.result.status); } catch (e) { return true; }
 }
 async function sendMessage(id, text) { return axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`, { chat_id: id, text, parse_mode: "Markdown" }); }
