@@ -14,7 +14,7 @@ const ADMIN_ID = 2067674349;
 const CHANNEL = "@StorylineArtNetwork";
 const GOTENBERG_URL = "https://storyline-studio-engine.onrender.com";
 const REMBG_URL = "https://storylineart3-rembg-api.hf.space/api/remove";
-const TASK_TIMEOUT = 45000; // 45 Seconds timeout
+const TASK_TIMEOUT = 45000; 
 
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL,
@@ -42,7 +42,6 @@ async function handleMessage(msg) {
     return sendMessage(chatId, `⛔ *Access Restricted*\n\nPlease join ${CHANNEL} to unlock all features.`);
   }
 
-  // ADMIN STATS
   if (chatId === ADMIN_ID && text === "/stats") {
     const total = await redis.scard("users");
     const stats = await redis.hgetall("feature_stats") || {};
@@ -53,7 +52,6 @@ async function handleMessage(msg) {
     return sendMessage(chatId, statMsg);
   }
 
-  // WELCOME MESSAGE
   if (text === "/start" || text === "/menu") {
     axios.get(GOTENBERG_URL, { timeout: 5000 }).catch(() => {});
     axios.get(REMBG_URL.replace("/api/remove", ""), { timeout: 5000 }).catch(() => {});
@@ -70,14 +68,12 @@ async function handleMessage(msg) {
     ]);
   }
 
-  // QR STATE
   if ((await redis.get(`state:${chatId}`)) === "wait_qr" && text) {
     await redis.del(`state:${chatId}`);
     const buf = await QRCode.toBuffer(text);
     return sendFile(chatId, buf, "generated_qr.png");
   }
 
-  // FILE DETECTION
   let fileId, menuTitle, buttons;
   if (msg.photo) {
     fileId = msg.photo.pop().file_id;
@@ -140,7 +136,6 @@ async function processTask(chatId, action) {
     const url = await getUrl(fileId);
     await redis.hincrby("feature_stats", action.split("_")[0], 1);
 
-    // 1. BG REMOVAL (With Timeout)
     if (action === "remove_bg") {
       const imgBuffer = await axios.get(url, { responseType: 'arraybuffer', timeout: TASK_TIMEOUT });
       const form = new FormData();
@@ -153,7 +148,6 @@ async function processTask(chatId, action) {
       await sendFile(chatId, Buffer.from(res.data), "No_BG.png");
     }
 
-    // 2. CONVERSIONS (With Timeout)
     else if (["doc_pdf", "pdf_jpg", "pdf_docx", "to_txt"].includes(action)) {
       const form = new FormData();
       const fileData = await axios.get(url, { responseType: 'arraybuffer', timeout: TASK_TIMEOUT });
@@ -174,7 +168,6 @@ async function processTask(chatId, action) {
       await sendFile(chatId, Buffer.from(res.data), `Studio_Result.${outExt}`);
     }
 
-    // 3. IMAGE TOOLS
     else if (action.startsWith("fmt_") || action.startsWith("res_") || action.startsWith("cmp_")) {
       const imgRes = await axios.get(url, { responseType: 'arraybuffer', timeout: TASK_TIMEOUT });
       const imgData = Buffer.from(imgRes.data);
@@ -185,7 +178,8 @@ async function processTask(chatId, action) {
       } 
       else if (action === "fmt_webp") {
         const wBuf = await sharp(imgData).webp().toBuffer();
-        await sendFile(chatId, wBuf, "image.webp");
+        // Fixed: Use a non-standard name to prevent Telegram from auto-rendering as a sticker
+        await sendFile(chatId, wBuf, "image_file.webp");
       }
       else {
         let pipeline = sharp(imgData);
@@ -206,7 +200,6 @@ async function processTask(chatId, action) {
       }
     }
 
-    // 4. BATCH
     if (action === "b_zip") {
       const ids = await redis.lrange(`batch:${chatId}`, 0, -1);
       const archive = archiver('zip');
@@ -224,7 +217,7 @@ async function processTask(chatId, action) {
 
   } catch (e) {
     let errorMsg = "⚠️ *Error:* Process failed. Please try again.";
-    if (e.code === 'ECONNABORTED') errorMsg = "🕒 *Timeout:* The process took too long. Please try a smaller file or try again later.";
+    if (e.code === 'ECONNABORTED') errorMsg = "🕒 *Timeout:* The process took too long. Please try again later.";
     
     await axios.post(`https://api.telegram.org/bot${TOKEN}/editMessageText`, {
       chat_id: chatId, message_id: proc.data.result.message_id,
