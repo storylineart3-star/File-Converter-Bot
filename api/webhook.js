@@ -41,7 +41,7 @@ async function handleMessage(msg) {
     return sendMessage(chatId, `⛔ *Access Restricted*\n\nPlease join ${CHANNEL} to unlock all features.`);
   }
 
-  // ADMIN STATS BREAKDOWN
+  // ADMIN STATS
   if (chatId === ADMIN_ID && text === "/stats") {
     const total = await redis.scard("users");
     const stats = await redis.hgetall("feature_stats") || {};
@@ -52,14 +52,15 @@ async function handleMessage(msg) {
     return sendMessage(chatId, statMsg);
   }
 
-  // CLEAN WELCOME MESSAGE
+  // WELCOME MESSAGE
   if (text === "/start" || text === "/menu") {
+    // Background pings
     axios.get(GOTENBERG_URL).catch(() => {});
     axios.get(REMBG_URL.replace("/api/remove", "")).catch(() => {});
 
     const welcome = "👋 *Welcome to Storyline Art Studio!*\n\nI am your all-in-one file assistant. Send me any file to begin:\n\n" +
       "🖼 *Images:* Remove BG, Resize, Convert, or Compress.\n" +
-      "📄 *Documents:* Convert Word/EPUB to PDF or PDF to JPG.\n" +
+      "📄 *Documents:* Convert Word, EPUB, or TXT to PDF.\n" +
       "🔳 *QR Tools:* Create or Scan QR codes instantly.\n" +
       "📦 *Batch:* Add multiple images and download as a ZIP.";
 
@@ -76,7 +77,7 @@ async function handleMessage(msg) {
     return sendFile(chatId, buf, "generated_qr.png");
   }
 
-  // FILE DETECTION
+  // FILE DETECTION (Updated for ePub and TXT)
   let fileId, menuTitle, buttons;
   if (msg.photo) {
     fileId = msg.photo.pop().file_id;
@@ -92,9 +93,10 @@ async function handleMessage(msg) {
     if (n.endsWith(".pdf")) {
       menuTitle = "📄 *PDF DETECTED*";
       buttons = [[{text:"PDF ➝ JPG",callback_data:"pdf_jpg"}, {text:"PDF ➝ DOCX",callback_data:"pdf_docx"}]];
-    } else if (n.endsWith(".docx") || n.endsWith(".doc") || n.endsWith(".epub")) {
-      menuTitle = "📝 *DOCUMENT DETECTED*";
-      buttons = [[{text:"Convert to PDF",callback_data:"doc_pdf"}]];
+    } else if (n.endsWith(".docx") || n.endsWith(".doc") || n.endsWith(".epub") || n.endsWith(".txt")) {
+      const ext = n.split('.').pop().toUpperCase();
+      menuTitle = `📝 *${ext} DETECTED*`;
+      buttons = [[{text:`Convert to PDF`, callback_data:"doc_pdf"}]];
     }
   }
 
@@ -132,29 +134,30 @@ async function processTask(chatId, action) {
     const url = await getUrl(fileId);
     await redis.hincrby("feature_stats", action.split("_")[0], 1);
 
-    // 1. FIXED BACKGROUND REMOVAL (Pushing buffer to bypass DNS errors)
+    // 1. BG REMOVAL
     if (action === "remove_bg") {
       const imgBuffer = await axios.get(url, { responseType: 'arraybuffer' });
       const form = new FormData();
       form.append('file', imgBuffer.data, { filename: 'image.png' });
-      
-      const res = await axios.post(REMBG_URL, form, { 
-        headers: form.getHeaders(), 
-        responseType: 'arraybuffer' 
-      });
+      const res = await axios.post(REMBG_URL, form, { headers: form.getHeaders(), responseType: 'arraybuffer' });
       await sendFile(chatId, Buffer.from(res.data), "No_BG.png");
     }
 
-    // 2. PDF / DOC CONVERSION
+    // 2. CONVERSIONS (EPUB, TXT, DOCX supported)
     else if (["doc_pdf", "pdf_jpg", "pdf_docx"].includes(action)) {
       const form = new FormData();
-      const file = await axios.get(url, { responseType: 'stream' });
-      form.append('files', file.data, { filename: action.includes("pdf") ? "in.pdf" : "in.docx" });
+      const fileStream = await axios.get(url, { responseType: 'stream' });
+      
+      // We must detect the original extension for Gotenberg to handle it correctly
+      const fileInfo = await axios.get(`https://api.telegram.org/bot${TOKEN}/getFile?file_id=${fileId}`);
+      const originalExt = fileInfo.data.result.file_path.split('.').pop();
+      
+      form.append('files', fileStream.data, { filename: `input.${originalExt}` });
       const res = await axios.post(`${GOTENBERG_URL}/forms/libreoffice/convert`, form, { headers: form.getHeaders(), responseType: 'arraybuffer' });
-      await sendFile(chatId, Buffer.from(res.data), `Result.${action.split('_')[1]}`);
+      await sendFile(chatId, Buffer.from(res.data), `Studio_Result.${action.split('_')[1]}`);
     }
 
-    // 3. IMAGE TOOLS (SHARP) + FIX STICKER/WEBP
+    // 3. IMAGE TOOLS (SHARP) - WebP as File, Sticker as Sticker
     else if (action.startsWith("fmt_") || action.startsWith("res_") || action.startsWith("cmp_")) {
       const img = await axios.get(url, { responseType: 'arraybuffer' });
       
@@ -163,6 +166,7 @@ async function processTask(chatId, action) {
         await sendSticker(chatId, sBuf);
       } 
       else if (action === "fmt_webp") {
+        // Sent as a proper document file
         const wBuf = await sharp(img.data).webp().toBuffer();
         await sendFile(chatId, wBuf, "image.webp");
       }
@@ -180,7 +184,7 @@ async function processTask(chatId, action) {
       }
     }
 
-    // 4. BATCH ZIP
+    // 4. BATCH
     if (action === "b_zip") {
       const ids = await redis.lrange(`batch:${chatId}`, 0, -1);
       const archive = archiver('zip');
@@ -194,13 +198,12 @@ async function processTask(chatId, action) {
       await sendFile(chatId, stream, "Studio_Batch.zip");
     }
 
-    // Cleanup
     await axios.post(`https://api.telegram.org/bot${TOKEN}/deleteMessage`, { chat_id: chatId, message_id: proc.data.result.message_id });
 
   } catch (e) {
     await axios.post(`https://api.telegram.org/bot${TOKEN}/editMessageText`, {
       chat_id: chatId, message_id: proc.data.result.message_id,
-      text: "⚠️ *Server is booting up.* Please try again in 30 seconds."
+      text: "⚠️ *Error:* File conversion failed. Please try a different file format."
     });
   }
 }
@@ -224,5 +227,5 @@ async function checkJoin(id) {
 }
 async function sendMessage(id, text) { return axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`, { chat_id: id, text, parse_mode: "Markdown" }); }
 async function sendButtons(id, text, buttons) { return axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`, { chat_id: id, text, parse_mode: "Markdown", reply_markup: { inline_keyboard: buttons } }); }
-async function sendHelp(id) { return sendMessage(id, "📖 *QUICK GUIDE*\n\n1. Send an image to get format and background tools.\n2. Send a PDF or Word file to convert them.\n3. Add images to 'Batch' to get a single ZIP file."); }
+async function sendHelp(id) { return sendMessage(id, "📖 *QUICK GUIDE*\n\n1. Send an image for background removal or conversion.\n2. Send PDF, DOCX, EPUB, or TXT for document tools.\n3. Add images to 'Batch' for a ZIP file."); }
 
