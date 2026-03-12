@@ -60,7 +60,7 @@ async function handleMessage(msg) {
     axios.get(GOTENBERG_URL).catch(() => {});
     axios.get(REMBG_URL.replace("/api/remove", "")).catch(() => {});
 
-    return sendButtons(chatId, "💠 *FILE & IMAGE STUDIO*\n\nEngines are **Warmed Up**. Send any Image or Document to begin.", [
+    return sendButtons(chatId, "💠 *FILE & IMAGE STUDIO*\n\nWelcome to File Converter & Resizer Bot, send PDF, WORD, DOCX or Images to use tools. Send any Image or Document to begin.", [
       [{ text: "🔳 Generate QR", callback_data: "qr_gen" }, { text: "📦 View Batch", callback_data: "m_batch" }],
       [{ text: "❓ Help & Guide", callback_data: "help" }]
     ]);
