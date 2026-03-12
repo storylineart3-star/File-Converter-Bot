@@ -42,6 +42,7 @@ async function handleMessage(msg) {
     return sendMessage(chatId, `⛔ *Access Restricted*\n\nPlease join ${CHANNEL} to unlock all features.`);
   }
 
+  // ADMIN STATS
   if (chatId === ADMIN_ID && text === "/stats") {
     const total = await redis.scard("users");
     const stats = await redis.hgetall("feature_stats") || {};
@@ -52,6 +53,31 @@ async function handleMessage(msg) {
     return sendMessage(chatId, statMsg);
   }
 
+  // ADMIN BROADCAST
+  if (chatId === ADMIN_ID && ((text && text.startsWith("/broadcast")) || (msg.caption && msg.caption.startsWith("/broadcast")))) {
+    const bText = text ? text.replace("/broadcast", "").trim() : (msg.caption ? msg.caption.replace("/broadcast", "").trim() : "");
+    const users = await redis.smembers("users") || [];
+    let sent = 0;
+    const proc = await sendMessage(chatId, "⏳ *Broadcasting...*");
+    for (const u of users) {
+      try {
+        if (msg.photo) {
+          await axios.post(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, { chat_id: u, photo: msg.photo[msg.photo.length - 1].file_id, caption: bText, parse_mode: "Markdown" });
+        } else if (msg.document) {
+          await axios.post(`https://api.telegram.org/bot${TOKEN}/sendDocument`, { chat_id: u, document: msg.document.file_id, caption: bText, parse_mode: "Markdown" });
+        } else if (bText) {
+          await sendMessage(u, bText);
+        }
+        sent++;
+      } catch(e) {}
+    }
+    return axios.post(`https://api.telegram.org/bot${TOKEN}/editMessageText`, {
+      chat_id: chatId, message_id: proc.data.result.message_id,
+      text: `📢 *Broadcast complete!* Sent to ${sent} users.`, parse_mode: "Markdown"
+    });
+  }
+
+  // WELCOME MESSAGE
   if (text === "/start" || text === "/menu") {
     axios.get(GOTENBERG_URL, { timeout: 5000 }).catch(() => {});
     axios.get(REMBG_URL.replace("/api/remove", ""), { timeout: 5000 }).catch(() => {});
@@ -68,12 +94,14 @@ async function handleMessage(msg) {
     ]);
   }
 
+  // QR STATE
   if ((await redis.get(`state:${chatId}`)) === "wait_qr" && text) {
     await redis.del(`state:${chatId}`);
     const buf = await QRCode.toBuffer(text);
     return sendFile(chatId, buf, "generated_qr.png");
   }
 
+  // FILE DETECTION
   let fileId, menuTitle, buttons;
   if (msg.photo) {
     fileId = msg.photo.pop().file_id;
@@ -178,8 +206,8 @@ async function processTask(chatId, action) {
       } 
       else if (action === "fmt_webp") {
         const wBuf = await sharp(imgData).webp().toBuffer();
-        // Fixed: Use a non-standard name to prevent Telegram from auto-rendering as a sticker
-        await sendFile(chatId, wBuf, "image_file.webp");
+        // Passing true here triggers the forceFile parameter to prevent sticker rendering
+        await sendFile(chatId, wBuf, "image.webp", true);
       }
       else {
         let pipeline = sharp(imgData);
@@ -231,19 +259,27 @@ async function getUrl(id) {
   const r = await axios.get(`https://api.telegram.org/bot${TOKEN}/getFile?file_id=${id}`);
   return `https://api.telegram.org/file/bot${TOKEN}/${r.data.result.file_path}`;
 }
-async function sendFile(chatId, buffer, filename) {
-  const f = new FormData(); f.append("chat_id", chatId); f.append("document", buffer, { filename });
+
+async function sendFile(chatId, buffer, filename, forceFile = false) {
+  const f = new FormData(); 
+  f.append("chat_id", chatId); 
+  const opts = { filename };
+  if (forceFile) opts.contentType = "application/octet-stream";
+  f.append("document", buffer, opts);
   return axios.post(`https://api.telegram.org/bot${TOKEN}/sendDocument`, f, { headers: f.getHeaders() });
 }
+
 async function sendSticker(chatId, buffer) {
   const f = new FormData(); f.append("chat_id", chatId); f.append("sticker", buffer, { filename: "sticker.webp" });
   return axios.post(`https://api.telegram.org/bot${TOKEN}/sendSticker`, f, { headers: f.getHeaders() });
 }
+
 async function checkJoin(id) {
   try { const r = await axios.get(`https://api.telegram.org/bot${TOKEN}/getChatMember?chat_id=${CHANNEL}&user_id=${id}`);
   return ["member", "administrator", "creator"].includes(r.data.result.status); } catch (e) { return true; }
 }
+
 async function sendMessage(id, text) { return axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`, { chat_id: id, text, parse_mode: "Markdown" }); }
 async function sendButtons(id, text, buttons) { return axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`, { chat_id: id, text, parse_mode: "Markdown", reply_markup: { inline_keyboard: buttons } }); }
 async function sendHelp(id) { return sendMessage(id, "📖 *QUICK GUIDE*\n\n1. Send an image for background removal or conversion.\n2. Send PDF, DOCX, EPUB, or TXT for document tools.\n3. Add images to 'Batch' for a ZIP file."); }
-
+         
