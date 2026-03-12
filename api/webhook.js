@@ -41,7 +41,6 @@ async function handleMessage(msg) {
     return sendMessage(chatId, `⛔ *Access Restricted*\n\nPlease join ${CHANNEL} to unlock all features.`);
   }
 
-  // ADMIN STATS
   if (chatId === ADMIN_ID && text === "/stats") {
     const total = await redis.scard("users");
     const stats = await redis.hgetall("feature_stats") || {};
@@ -52,15 +51,13 @@ async function handleMessage(msg) {
     return sendMessage(chatId, statMsg);
   }
 
-  // WELCOME MESSAGE
   if (text === "/start" || text === "/menu") {
-    // Background pings
     axios.get(GOTENBERG_URL).catch(() => {});
     axios.get(REMBG_URL.replace("/api/remove", "")).catch(() => {});
 
     const welcome = "👋 *Welcome to Storyline Art Studio!*\n\nI am your all-in-one file assistant. Send me any file to begin:\n\n" +
       "🖼 *Images:* Remove BG, Resize, Convert, or Compress.\n" +
-      "📄 *Documents:* Convert Word, EPUB, or TXT to PDF.\n" +
+      "📄 *Documents:* Convert Word, EPUB, PDF, or TXT.\n" +
       "🔳 *QR Tools:* Create or Scan QR codes instantly.\n" +
       "📦 *Batch:* Add multiple images and download as a ZIP.";
 
@@ -70,14 +67,12 @@ async function handleMessage(msg) {
     ]);
   }
 
-  // QR STATE
   if ((await redis.get(`state:${chatId}`)) === "wait_qr" && text) {
     await redis.del(`state:${chatId}`);
     const buf = await QRCode.toBuffer(text);
     return sendFile(chatId, buf, "generated_qr.png");
   }
 
-  // FILE DETECTION (Updated for ePub and TXT)
   let fileId, menuTitle, buttons;
   if (msg.photo) {
     fileId = msg.photo.pop().file_id;
@@ -92,11 +87,17 @@ async function handleMessage(msg) {
     const n = msg.document.file_name.toLowerCase();
     if (n.endsWith(".pdf")) {
       menuTitle = "📄 *PDF DETECTED*";
-      buttons = [[{text:"PDF ➝ JPG",callback_data:"pdf_jpg"}, {text:"PDF ➝ DOCX",callback_data:"pdf_docx"}]];
+      buttons = [
+        [{text:"PDF ➝ JPG",callback_data:"pdf_jpg"}, {text:"PDF ➝ DOCX",callback_data:"pdf_docx"}],
+        [{text:"PDF ➝ TXT",callback_data:"to_txt"}]
+      ];
     } else if (n.endsWith(".docx") || n.endsWith(".doc") || n.endsWith(".epub") || n.endsWith(".txt")) {
       const ext = n.split('.').pop().toUpperCase();
       menuTitle = `📝 *${ext} DETECTED*`;
-      buttons = [[{text:`Convert to PDF`, callback_data:"doc_pdf"}]];
+      buttons = [
+        [{text:`Convert to PDF`, callback_data:"doc_pdf"}],
+        [{text:`Convert to TXT`, callback_data:"to_txt"}]
+      ];
     }
   }
 
@@ -143,38 +144,50 @@ async function processTask(chatId, action) {
       await sendFile(chatId, Buffer.from(res.data), "No_BG.png");
     }
 
-    // 2. CONVERSIONS (EPUB, TXT, DOCX supported)
-    else if (["doc_pdf", "pdf_jpg", "pdf_docx"].includes(action)) {
+    // 2. CONVERSIONS (PDF, DOCX, EPUB, TXT)
+    else if (["doc_pdf", "pdf_jpg", "pdf_docx", "to_txt"].includes(action)) {
       const form = new FormData();
-      const fileStream = await axios.get(url, { responseType: 'stream' });
+      const fileData = await axios.get(url, { responseType: 'arraybuffer' });
       
-      // We must detect the original extension for Gotenberg to handle it correctly
       const fileInfo = await axios.get(`https://api.telegram.org/bot${TOKEN}/getFile?file_id=${fileId}`);
       const originalExt = fileInfo.data.result.file_path.split('.').pop();
       
-      form.append('files', fileStream.data, { filename: `input.${originalExt}` });
+      form.append('files', Buffer.from(fileData.data), { filename: `input.${originalExt}` });
+      
+      // Handle the output extension
+      let outExt = action.split('_')[1];
+      if (action === "to_txt") outExt = "txt";
+      if (action === "doc_pdf") outExt = "pdf";
+
       const res = await axios.post(`${GOTENBERG_URL}/forms/libreoffice/convert`, form, { headers: form.getHeaders(), responseType: 'arraybuffer' });
-      await sendFile(chatId, Buffer.from(res.data), `Studio_Result.${action.split('_')[1]}`);
+      await sendFile(chatId, Buffer.from(res.data), `Studio_Result.${outExt}`);
     }
 
-    // 3. IMAGE TOOLS (SHARP) - WebP as File, Sticker as Sticker
+    // 3. IMAGE TOOLS (SHARP) - Fixed Resizer & WebP/Sticker
     else if (action.startsWith("fmt_") || action.startsWith("res_") || action.startsWith("cmp_")) {
-      const img = await axios.get(url, { responseType: 'arraybuffer' });
+      const imgRes = await axios.get(url, { responseType: 'arraybuffer' });
+      const imgData = Buffer.from(imgRes.data);
       
       if (action === "fmt_sticker") {
-        const sBuf = await sharp(img.data).resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp().toBuffer();
+        const sBuf = await sharp(imgData).resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp().toBuffer();
         await sendSticker(chatId, sBuf);
       } 
       else if (action === "fmt_webp") {
-        // Sent as a proper document file
-        const wBuf = await sharp(img.data).webp().toBuffer();
+        const wBuf = await sharp(imgData).webp().toBuffer();
         await sendFile(chatId, wBuf, "image.webp");
       }
       else {
-        let pipeline = sharp(img.data);
+        let pipeline = sharp(imgData);
         if (action.startsWith("res_")) {
           const r = action.split("_")[1];
-          pipeline = pipeline.resize(r === "16:9" ? 1280 : 800, null);
+          const meta = await sharp(imgData).metadata();
+          let w = meta.width, h = meta.height;
+          
+          if (r === "2:3") { w/h > 2/3 ? w = Math.round(h*(2/3)) : h = Math.round(w*(3/2)); }
+          else if (r === "16:9") { w/h > 16/9 ? w = Math.round(h*(16/9)) : h = Math.round(w*(9/16)); }
+          else if (r === "1:1") { w > h ? w = h : h = w; }
+          
+          pipeline = pipeline.resize(w, h, { fit: 'cover' });
         }
         if (action.startsWith("cmp_")) {
           pipeline = pipeline.jpeg({ quality: parseInt(action.split("_")[1]) });
@@ -203,7 +216,7 @@ async function processTask(chatId, action) {
   } catch (e) {
     await axios.post(`https://api.telegram.org/bot${TOKEN}/editMessageText`, {
       chat_id: chatId, message_id: proc.data.result.message_id,
-      text: "⚠️ *Error:* File conversion failed. Please try a different file format."
+      text: "⚠️ *Error:* Conversion failed. Please ensure the file is not corrupted."
     });
   }
 }
@@ -222,7 +235,7 @@ async function sendSticker(chatId, buffer) {
   return axios.post(`https://api.telegram.org/bot${TOKEN}/sendSticker`, f, { headers: f.getHeaders() });
 }
 async function checkJoin(id) {
-  try { const r = await axios.get(`https://api.telegram.org/bot${TOKEN}/getChatMember?chat_id=${CHANNEL}&user_id=${id}`);
+  try { const r = await axios.get(`https://api.telegram.org/getChatMember?chat_id=${CHANNEL}&user_id=${id}`);
   return ["member", "administrator", "creator"].includes(r.data.result.status); } catch (e) { return true; }
 }
 async function sendMessage(id, text) { return axios.post(`https://api.telegram.org/bot${TOKEN}/sendMessage`, { chat_id: id, text, parse_mode: "Markdown" }); }
